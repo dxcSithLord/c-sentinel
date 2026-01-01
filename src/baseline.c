@@ -25,64 +25,8 @@
 /* Default baseline location */
 #define DEFAULT_BASELINE_DIR ".sentinel"
 #define BASELINE_FILENAME "baseline.dat"
-#define MAX_BASELINE_LISTENERS 64
-#define MAX_BASELINE_CONFIGS 32
 
-/* Baseline data structure - what we consider "normal" */
-typedef struct {
-    /* Header */
-    char magic[8];              /* "SNTLBASE" */
-    uint32_t version;           /* Baseline format version */
-    time_t created;
-    time_t last_updated;
-    char hostname[256];
-    int sample_count;           /* How many samples contributed */
-    
-    /* Normal process ranges */
-    int process_count_min;
-    int process_count_max;
-    int process_count_avg;
-    
-    /* Normal memory usage */
-    double memory_used_percent_avg;
-    double memory_used_percent_max;
-    
-    /* Normal load */
-    double load_avg_1_max;
-    double load_avg_5_max;
-    
-    /* Expected listeners - ports that should be open */
-    uint16_t expected_ports[MAX_BASELINE_LISTENERS];
-    int expected_port_count;
-    
-    /* Expected config checksums */
-    struct {
-        char path[256];
-        char checksum[65];
-    } expected_configs[MAX_BASELINE_CONFIGS];
-    int expected_config_count;
-    
-} baseline_t;
-
-/* Deviation report */
-typedef struct {
-    int new_listeners;          /* Ports open that weren't before */
-    int missing_listeners;      /* Ports that should be open but aren't */
-    int config_changes;         /* Config files with different checksums */
-    int process_count_anomaly;  /* Outside normal range */
-    int memory_anomaly;         /* Higher than normal */
-    int load_anomaly;           /* Higher than normal */
-    
-    /* Details */
-    uint16_t new_ports[32];
-    int new_port_count;
-    uint16_t missing_ports[32];
-    int missing_port_count;
-    char changed_configs[8][256];
-    int changed_config_count;
-    
-    int total_deviations;
-} deviation_report_t;
+/* Note: baseline_t and deviation_report_t are defined in sentinel.h */
 
 /* Get baseline directory path */
 static void get_baseline_dir(char *path, size_t path_size) {

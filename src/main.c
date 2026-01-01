@@ -20,34 +20,6 @@
 
 #include "sentinel.h"
 
-/* Forward declarations for new modules */
-typedef struct baseline baseline_t;
-typedef struct deviation_report deviation_report_t;
-typedef struct sentinel_config sentinel_config_t;
-typedef struct alert alert_t;
-
-/* Baseline functions */
-extern void baseline_init(baseline_t *b);
-extern int baseline_load(baseline_t *b);
-extern int baseline_save(const baseline_t *b);
-extern int baseline_learn(baseline_t *b, const fingerprint_t *fp);
-extern int baseline_compare(const baseline_t *b, const fingerprint_t *fp, 
-                            deviation_report_t *report);
-extern void baseline_print_report(const baseline_t *b, const deviation_report_t *report);
-extern void baseline_print_info(const baseline_t *b);
-
-/* Config functions */
-extern int config_load(void);
-extern const sentinel_config_t* config_get(void);
-extern int config_create_default(void);
-extern void config_print(void);
-
-/* Alert functions - use void* to avoid including full struct */
-extern int alert_send_webhook(const char *url, const void *alert);
-extern int alert_create_from_analysis(void *alert, const fingerprint_t *fp, 
-                                       const quick_analysis_t *analysis, int severity);
-extern void alert_print(const void *alert);
-
 /* Default config files to probe if none specified */
 static const char *default_configs[] = {
     "/etc/hosts",
@@ -316,22 +288,20 @@ int main(int argc, char *argv[]) {
         }
         
         /* Load existing baseline or create new */
-        /* Using static allocation to avoid complex header includes */
-        static char baseline_buf[8192];  /* Large enough for baseline_t */
-        baseline_t *b = (baseline_t *)baseline_buf;
+        static baseline_t baseline;
         
-        if (baseline_load(b) != 0) {
-            baseline_init(b);
+        if (baseline_load(&baseline) != 0) {
+            baseline_init(&baseline);
             printf("Creating new baseline...\n");
         } else {
             printf("Updating existing baseline...\n");
         }
         
-        baseline_learn(b, &fp);
+        baseline_learn(&baseline, &fp);
         
-        if (baseline_save(b) == 0) {
+        if (baseline_save(&baseline) == 0) {
             printf("Baseline saved to ~/.sentinel/baseline.dat\n");
-            baseline_print_info(b);
+            baseline_print_info(&baseline);
             return EXIT_OK;
         } else {
             fprintf(stderr, "Failed to save baseline\n");
@@ -341,10 +311,9 @@ int main(int argc, char *argv[]) {
     
     /* Handle --baseline */
     if (baseline_mode) {
-        static char baseline_buf[8192];
-        baseline_t *b = (baseline_t *)baseline_buf;
+        static baseline_t baseline;
         
-        if (baseline_load(b) != 0) {
+        if (baseline_load(&baseline) != 0) {
             fprintf(stderr, "No baseline found. Run with --learn first.\n");
             return EXIT_ERROR;
         }
@@ -369,11 +338,10 @@ int main(int argc, char *argv[]) {
         printf("Processes: %d total\n", fp.process_count);
         
         /* Compare against baseline */
-        static char report_buf[2048];  /* Large enough for deviation_report_t */
-        deviation_report_t *report = (deviation_report_t *)report_buf;
+        deviation_report_t report;
         
-        int deviations = baseline_compare(b, &fp, report);
-        baseline_print_report(b, report);
+        int deviations = baseline_compare(&baseline, &fp, &report);
+        baseline_print_report(&baseline, &report);
         
         if (deviations > 0) {
             return EXIT_CRITICAL;
