@@ -20,11 +20,13 @@
 #include <sys/stat.h>
 
 /* Version and limits */
-#define SENTINEL_VERSION "0.1.0"
+#define SENTINEL_VERSION "0.2.0"
 #define MAX_PATH_LEN 4096
 #define MAX_PROCS 1024
 #define MAX_FDS_PER_PROC 256
 #define MAX_CONFIG_FILES 64
+#define MAX_LISTENERS 128
+#define MAX_CONNECTIONS 256
 
 /* ============================================================
  * Core Data Structures - The "System Fingerprint"
@@ -82,6 +84,39 @@ typedef struct {
     char checksum[65];          /* SHA256 hex string */
 } config_file_t;
 
+/* Network listener - for detecting unexpected open ports */
+typedef struct {
+    char protocol[8];           /* tcp, tcp6, udp, udp6 */
+    char local_addr[64];        /* IP address */
+    uint16_t local_port;
+    char state[16];             /* LISTEN, ESTABLISHED, etc. */
+    pid_t pid;                  /* Process owning this socket */
+    char process_name[256];     /* Name of owning process */
+} net_listener_t;
+
+/* Network connection - for detecting suspicious connections */
+typedef struct {
+    char protocol[8];
+    char local_addr[64];
+    uint16_t local_port;
+    char remote_addr[64];
+    uint16_t remote_port;
+    char state[16];
+    pid_t pid;
+    char process_name[256];
+} net_connection_t;
+
+/* Network summary */
+typedef struct {
+    net_listener_t listeners[MAX_LISTENERS];
+    int listener_count;
+    net_connection_t connections[MAX_CONNECTIONS];
+    int connection_count;
+    int total_established;
+    int total_listening;
+    int unusual_port_count;     /* Ports not in common list */
+} network_info_t;
+
 /* The complete system fingerprint */
 typedef struct {
     system_info_t system;
@@ -89,6 +124,7 @@ typedef struct {
     int process_count;
     config_file_t configs[MAX_CONFIG_FILES];
     int config_count;
+    network_info_t network;
     /* Metadata about the probe itself */
     double probe_duration_ms;
     int probe_errors;
@@ -114,6 +150,9 @@ int probe_config_files(const char **paths, int path_count,
 /* Full fingerprint capture */
 int capture_fingerprint(fingerprint_t *fp, const char **config_paths, 
                         int config_path_count);
+
+/* Probe network state */
+int probe_network(network_info_t *net);
 
 /* ============================================================
  * Serialization - Convert to JSON for LLM
@@ -143,7 +182,16 @@ typedef struct {
     int long_running_process_count; /* Running >7 days */
     int config_permission_issues;   /* World-writable, etc. */
     int config_drift_detected;      /* Checksums differ from expected */
+    int unusual_listeners;          /* Ports not in common services list */
+    int external_connections;       /* Connections to non-local IPs */
+    int total_issues;               /* Sum of all issues for exit code */
 } quick_analysis_t;
+
+/* Exit codes for CI/CD integration */
+#define EXIT_OK 0
+#define EXIT_WARNINGS 1
+#define EXIT_CRITICAL 2
+#define EXIT_ERROR 3
 
 int analyze_fingerprint_quick(const fingerprint_t *fp, quick_analysis_t *result);
 

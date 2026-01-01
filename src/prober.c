@@ -343,5 +343,24 @@ int analyze_fingerprint_quick(const fingerprint_t *fp, quick_analysis_t *result)
         }
     }
     
+    /* Network checks */
+    result->unusual_listeners = fp->network.unusual_port_count;
+    
+    /* Count external connections (non-localhost) */
+    for (int i = 0; i < fp->network.connection_count; i++) {
+        const net_connection_t *c = &fp->network.connections[i];
+        /* Check if remote address is not localhost */
+        if (strcmp(c->remote_addr, "127.0.0.1") != 0 &&
+            strcmp(c->remote_addr, "0.0.0.0") != 0 &&
+            strncmp(c->remote_addr, "00000000", 8) != 0) {
+            result->external_connections++;
+        }
+    }
+    
+    /* Calculate total issues for exit code */
+    result->total_issues = result->zombie_process_count +
+                           result->config_permission_issues +
+                           result->unusual_listeners;
+    
     return 0;
 }

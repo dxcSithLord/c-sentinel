@@ -34,6 +34,3 @@ output/
 # Temporary files
 *.tmp
 *.log
-
-# Zip files (uploaded by mistake)
-*.zip

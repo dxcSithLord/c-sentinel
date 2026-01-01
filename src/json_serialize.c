@@ -255,7 +255,65 @@ char* fingerprint_to_json(const fingerprint_t *fp) {
         
         buf_append(&buf, "\n    }");
     }
-    buf_append(&buf, "\n  ]\n");
+    buf_append(&buf, "\n  ],\n");
+    
+    /* Network info */
+    buf_append(&buf, "  \"network\": {\n");
+    buf_appendf(&buf, "    \"total_listeners\": %d,\n", fp->network.total_listening);
+    buf_appendf(&buf, "    \"total_established\": %d,\n", fp->network.total_established);
+    buf_appendf(&buf, "    \"unusual_ports\": %d,\n", fp->network.unusual_port_count);
+    
+    /* Listeners */
+    buf_append(&buf, "    \"listeners\": [\n");
+    for (int i = 0; i < fp->network.listener_count; i++) {
+        const net_listener_t *l = &fp->network.listeners[i];
+        
+        if (i > 0) buf_append(&buf, ",\n");
+        
+        buf_append(&buf, "      {\n");
+        buf_append(&buf, "        \"protocol\": ");
+        buf_append_json_string(&buf, l->protocol);
+        buf_append(&buf, ",\n");
+        buf_append(&buf, "        \"address\": ");
+        buf_append_json_string(&buf, l->local_addr);
+        buf_append(&buf, ",\n");
+        buf_appendf(&buf, "        \"port\": %d,\n", l->local_port);
+        buf_appendf(&buf, "        \"pid\": %d,\n", l->pid);
+        buf_append(&buf, "        \"process\": ");
+        buf_append_json_string(&buf, l->process_name);
+        buf_append(&buf, "\n      }");
+    }
+    buf_append(&buf, "\n    ],\n");
+    
+    /* Connections */
+    buf_append(&buf, "    \"connections\": [\n");
+    for (int i = 0; i < fp->network.connection_count; i++) {
+        const net_connection_t *c = &fp->network.connections[i];
+        
+        if (i > 0) buf_append(&buf, ",\n");
+        
+        buf_append(&buf, "      {\n");
+        buf_append(&buf, "        \"protocol\": ");
+        buf_append_json_string(&buf, c->protocol);
+        buf_append(&buf, ",\n");
+        buf_append(&buf, "        \"local_addr\": ");
+        buf_append_json_string(&buf, c->local_addr);
+        buf_append(&buf, ",\n");
+        buf_appendf(&buf, "        \"local_port\": %d,\n", c->local_port);
+        buf_append(&buf, "        \"remote_addr\": ");
+        buf_append_json_string(&buf, c->remote_addr);
+        buf_append(&buf, ",\n");
+        buf_appendf(&buf, "        \"remote_port\": %d,\n", c->remote_port);
+        buf_append(&buf, "        \"state\": ");
+        buf_append_json_string(&buf, c->state);
+        buf_append(&buf, ",\n");
+        buf_appendf(&buf, "        \"pid\": %d,\n", c->pid);
+        buf_append(&buf, "        \"process\": ");
+        buf_append_json_string(&buf, c->process_name);
+        buf_append(&buf, "\n      }");
+    }
+    buf_append(&buf, "\n    ]\n");
+    buf_append(&buf, "  }\n");
     
     buf_append(&buf, "}\n");
     

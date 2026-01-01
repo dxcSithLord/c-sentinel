@@ -33,6 +33,7 @@ BIN_DIR = bin
 # Main sentinel sources
 SENTINEL_SRCS = $(SRC_DIR)/main.c \
                 $(SRC_DIR)/prober.c \
+                $(SRC_DIR)/net_probe.c \
                 $(SRC_DIR)/json_serialize.c \
                 $(SRC_DIR)/policy.c \
                 $(SRC_DIR)/sanitize.c
