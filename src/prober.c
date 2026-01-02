@@ -214,25 +214,6 @@ int probe_processes(process_info_t *procs, int max_procs, int *count) {
  * Config File Probing
  * ============================================================ */
 
-/* Simple checksum - in production, use SHA256 */
-static void compute_simple_checksum(const char *path, char *out, size_t out_size) {
-    FILE *f = fopen(path, "rb");
-    if (!f) {
-        safe_strcpy(out, "error", out_size);
-        return;
-    }
-    
-    /* Simple hash for demonstration - replace with OpenSSL SHA256 */
-    unsigned long hash = 5381;
-    int c;
-    while ((c = fgetc(f)) != EOF) {
-        hash = ((hash << 5) + hash) + c;
-    }
-    fclose(f);
-    
-    snprintf(out, out_size, "%016lx", hash);
-}
-
 int probe_config_files(const char **paths, int path_count,
                        config_file_t *configs, int *config_count) {
     if (!configs || !config_count) return -1;
@@ -254,7 +235,8 @@ int probe_config_files(const char **paths, int path_count,
         cfg->owner = st.st_uid;
         cfg->group = st.st_gid;
         
-        compute_simple_checksum(paths[i], cfg->checksum, sizeof(cfg->checksum));
+        /* Compute SHA256 checksum */
+        sha256_file(paths[i], cfg->checksum, sizeof(cfg->checksum));
         
         (*config_count)++;
     }

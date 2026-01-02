@@ -39,7 +39,8 @@ SENTINEL_SRCS = $(SRC_DIR)/main.c \
                 $(SRC_DIR)/sanitize.c \
                 $(SRC_DIR)/baseline.c \
                 $(SRC_DIR)/config.c \
-                $(SRC_DIR)/alert.c
+                $(SRC_DIR)/alert.c \
+                $(SRC_DIR)/sha256.c
 
 SENTINEL_OBJS = $(SENTINEL_SRCS:$(SRC_DIR)/%.c=$(BUILD_DIR)/%.o)
 

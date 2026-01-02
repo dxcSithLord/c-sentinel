@@ -276,4 +276,11 @@ int config_load(void);
 int config_create_default(void);
 void config_print(void);
 
+/* ============================================================
+ * SHA256 Checksums
+ * ============================================================ */
+
+int sha256_file(const char *path, char *out, size_t out_size);
+int sha256_string(const char *str, char *out, size_t out_size);
+
 #endif /* SENTINEL_H */
