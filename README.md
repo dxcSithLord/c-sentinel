@@ -9,7 +9,7 @@ A lightweight, portable system prober written in C that captures "system fingerp
 
 **Live Demo**: [sentinel.speytech.com](https://sentinel.speytech.com)
 
-![Dashboard Screenshot](docs/dashboard-screenshot.png)
+![Dashboard Screenshot](docs/main-dashboard.png)
 
 ## What's New in v0.3.0
 
