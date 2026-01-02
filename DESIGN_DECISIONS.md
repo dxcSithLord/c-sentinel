@@ -24,20 +24,165 @@ This document explains the architectural choices made in C-Sentinel, why they we
 
 ## The Hybrid Architecture
 
-**Decision**: C for the prober, with Python/shell wrapper for API communication.
+**Decision**: C for the prober, Python for API communication, Flask for dashboard.
 
 **Rationale**:
-The problem naturally splits into two distinct domains:
-1. **System probing**: Low-level, performance-sensitive, needs direct OS access
-2. **API communication**: HTTP requests, JSON parsing of responses, error handling
+The problem naturally splits into three distinct domains:
+1. **System probing**: Low-level, performance-sensitive, needs direct OS access → C
+2. **API communication**: HTTP requests, JSON parsing of responses, error handling → Python
+3. **Dashboard**: Web interface, database queries, real-time updates → Flask/PostgreSQL
 
-Forcing both into C would mean pulling in `libcurl` and a JSON parsing library, adding complexity and dependencies for the API layer—the opposite of what we want for the lightweight prober.
+Forcing all of this into C would mean pulling in `libcurl`, a JSON parsing library, and a web framework—adding complexity and dependencies for the API layer, the opposite of what we want for the lightweight prober.
 
-The Python wrapper can:
-- Handle API authentication securely
-- Implement retry logic and rate limiting
-- Parse and present LLM responses
-- Add "policy engine" validation of suggestions
+```
+┌─────────────────────────────────────────┐
+│           Web Dashboard                 │
+│  Flask + PostgreSQL + Chart.js          │
+│  (Multi-host, charts, history)          │
+└─────────────────────────────────────────┘
+                    ▲
+                    │ JSON via HTTP POST
+                    │
+┌─────────────────────────────────────────┐
+│         Python Wrapper                  │
+│  (LLM integration, policy engine)       │
+└─────────────────────────────────────────┘
+                    │
+                    ▼
+┌─────────────────────────────────────────┐
+│         C Prober (76KB)                 │
+│  /proc parsing, SHA256, network scan    │
+└─────────────────────────────────────────┘
+```
+
+## SHA256 Checksums (v0.3.0)
+
+**Decision**: Implement SHA256 in pure C rather than using OpenSSL or linking to system libraries.
+
+**Rationale**:
+1. **Zero dependencies**: The prober remains a self-contained binary
+2. **Portability**: Works on any system without library version concerns
+3. **Cryptographic integrity**: SHA256 is industry-standard, verifiable by external tools
+4. **Audit-ready**: Config file checksums can be compared against known-good values
+
+**Implementation**:
+- Based on RFC 6234 / FIPS 180-4
+- ~250 lines of C
+- Verified against system `sha256sum` for correctness
+
+**Previous approach**: djb2 hash (16 chars) - fast but not cryptographically secure. Replaced with full SHA256 (64 chars) for proper integrity verification.
+
+**Trade-off**: SHA256 is slower than djb2. Acceptable—we're checksumming a handful of config files, not gigabytes of data.
+
+## Systemd Service Design (v0.3.0)
+
+**Decision**: Provide a production-ready systemd service unit with security hardening.
+
+**Rationale**:
+Watch mode (`--watch`) is useful for development, but production deployments need:
+- Automatic restart on failure
+- Clean shutdown handling
+- Resource limits
+- Security isolation
+- Logging to journald
+
+**Security hardening applied**:
+```ini
+NoNewPrivileges=yes      # Can't gain privileges via setuid
+ProtectSystem=strict     # / is read-only
+ProtectHome=read-only    # /home is read-only
+PrivateTmp=yes           # Isolated /tmp
+ReadWritePaths=/var/lib/sentinel  # Only place it can write
+```
+
+**Dedicated user**: The service runs as `sentinel` user with no home directory and `/usr/sbin/nologin` shell.
+
+**Exit code handling**:
+```ini
+SuccessExitStatus=0 1 2
+```
+
+This tells systemd that exit codes 0 (OK), 1 (WARNING), and 2 (CRITICAL) are all valid results—only exit code 3 (ERROR) triggers a restart. Without this, systemd would restart the service every time it found unusual ports!
+
+## Web Dashboard Design (v0.3.0)
+
+**Decision**: Flask + PostgreSQL + Chart.js for multi-host monitoring.
+
+**Rationale**:
+The CLI prober is excellent for single-host diagnostics, but teams need:
+- At-a-glance view of multiple hosts
+- Historical trending (memory, load over time)
+- Alerting when hosts go stale or critical
+- Drill-down to individual host details
+
+**Why Flask?**
+- Lightweight, no magic
+- Easy to deploy (gunicorn + nginx)
+- Sufficient for internal tooling
+- William's familiarity with Python ecosystem
+
+**Why PostgreSQL?**
+- Already running on target system (Umami)
+- JSONB type for flexible fingerprint storage
+- Excellent for time-series queries
+- Reliable, battle-tested
+
+**Why not Prometheus/Grafana?**
+- Adds operational complexity
+- Prometheus is metrics-focused, not fingerprint-focused
+- We want semantic data (process lists, config checksums), not just numbers
+- Building our own gives full control over the data model
+
+**Data model**:
+```sql
+hosts (id, hostname, first_seen, last_seen)
+fingerprints (id, host_id, captured_at, data JSONB, exit_code, ...)
+```
+
+JSONB allows storing the full fingerprint while extracting key fields (memory_percent, load_1m, etc.) into columns for efficient querying.
+
+**Dashboard-prober communication**:
+Agents POST JSON to `/api/ingest` with an API key. Simple, stateless, works through firewalls.
+
+```bash
+sentinel --json --network | curl -X POST \
+  -H "X-API-Key: secret" \
+  -d @- https://dashboard/api/ingest
+```
+
+## Auditd Integration Design (Planned)
+
+**Decision**: Summarise auditd logs rather than forwarding them raw.
+
+**Rationale**:
+Security tools like auditd and AIDE answer "what happened?" with precision. C-Sentinel asks "what's weird?" The combination is powerful:
+
+| Without auditd | With auditd |
+|----------------|-------------|
+| "3 unusual ports" | "3 unusual ports + 3 failed logins + /etc/shadow accessed by python script spawned from web server" |
+
+The key insight: **context is everything**. An LLM seeing "file accessed" is one thing; seeing "file accessed by python3 spawned from apache2" is a security incident.
+
+**Design principles**:
+1. **Summarise, don't dump** - Aggregate counts, not raw logs
+2. **Process ancestry** - Track the process chain (apache2 → bash → python3)
+3. **Baseline deviation** - "3 failures" vs "3 failures (400% above normal)"
+4. **Privacy-preserving** - Hash usernames, redact IPs in dashboard
+
+**What we'll capture**:
+- Authentication failures (count + hashed usernames + deviation from baseline)
+- Sudo/privilege escalation events
+- Sensitive file access with process chain
+- Executions from /tmp or /dev/shm (malware indicators)
+- SELinux/AppArmor denials
+
+**What we won't capture**:
+- Successful logins (noise)
+- Raw usernames (privacy)
+- Command arguments (could contain secrets)
+- File contents (never)
+
+See [docs/AUDIT_SPEC.md](docs/AUDIT_SPEC.md) for full specification.
 
 ## Fingerprint Design
 
@@ -100,13 +245,13 @@ Baseline learning solves this by recording what's normal *for this specific syst
 | Memory usage | Average and maximum |
 | Load average | Maximum observed |
 | Expected ports | List of ports that should be listening |
-| Config checksums | Detect file changes |
+| Config checksums | SHA256 for drift detection |
 
 **Learning vs. Comparing**:
 - `--learn`: Capture current state, merge with existing baseline
 - `--baseline`: Compare current state against learned baseline, report deviations
 
-**Storage format**: Binary struct written to `~/.sentinel/baseline.dat`
+**Storage format**: Binary struct written to `~/.sentinel/baseline.dat` (user) or `/var/lib/sentinel/baseline.dat` (service)
 - Magic number for validation ("SNTLBASE")
 - Version field for future compatibility
 - Creation and update timestamps
@@ -129,8 +274,10 @@ Users need to configure:
 - Good enough for flat key-value configuration
 - Human-readable and editable
 
-**Environment variable fallback**:
-API keys can come from environment variables (`ANTHROPIC_API_KEY`, etc.) or the config file. Environment takes precedence—standard practice for secrets.
+**Path priority** (service vs user):
+1. `/etc/sentinel/config` (system service)
+2. `~/.sentinel/config` (user mode)
+3. Environment variables (highest priority)
 
 **Security**:
 - Config file created with mode 0600 (owner read/write only)
@@ -194,7 +341,7 @@ while (keep_running) {
 }
 ```
 
-**Trade-off**: Long-running process vs. cron job. For production, a systemd service with restart-on-failure would be more robust. Added to roadmap.
+**Trade-off**: Long-running process vs. cron job. For production, the systemd service with restart-on-failure is more robust.
 
 ## "Notable" Process Selection
 
@@ -245,10 +392,15 @@ All paths and strings from external sources are length-limited. Buffer overflows
 The prober reads from `/proc` and specified config files. It requires:
 - Read access to `/proc` (standard for all users)
 - Read access to config files (may require appropriate group membership)
-- **No write access anywhere**
+- **No write access anywhere** (except baseline/config in its own directory)
 - **No root required** for basic operation
 
 Some probes (like reading all process FDs) may return partial results for non-root users. This is acceptable—we document what we could probe.
+
+### Dashboard security
+- API key required for ingestion
+- Sensitive audit data will require authentication (planned)
+- IP addresses redacted in public views
 
 ### Sanitization
 Before sending to LLM:
@@ -321,6 +473,9 @@ This tool embeds certain assumptions from experience:
 5. **File descriptor leaks are slow killers**: The system runs fine until suddenly it doesn't.
 6. **New listening ports are suspicious**: If a port wasn't open yesterday, ask why it's open today.
 7. **Missing services are emergencies**: If a port was supposed to be listening and isn't, something failed.
+8. **Context is everything**: "File accessed" is one thing; "file accessed by script spawned from web server" is an incident.
+9. **Baselines should be learned, not configured**: What's "normal" for one system isn't normal for another.
+10. **The simple approach often wins**: 76KB of C beats 100MB of dependencies.
 
 These aren't just heuristics—they're battle scars.
 
