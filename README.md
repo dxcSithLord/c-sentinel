@@ -333,7 +333,7 @@ sudo journalctl -u sentinel -f
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│                      Web Dashboard                               │
+│                      Web Dashboard                              │
 │  • Security posture summary    • Risk trend sparkline           │
 │  • Explainable risk factors    • Email alerts                   │
 │  • Event history timeline      • Learning indicator             │
@@ -343,7 +343,7 @@ sudo journalctl -u sentinel -f
                               │ JSON via HTTP POST
                               │
 ┌─────────────────────────────────────────────────────────────────┐
-│                     C Foundation (99KB)                          │
+│                     C Foundation (99KB)                         │
 │  • /proc parsing              • SHA256 checksums                │
 │  • Process analysis           • Drift detection                 │
 │  • Network probing            • Baseline learning               │
