@@ -39,6 +39,7 @@ Forcing all of this into C would mean pulling in `libcurl`, a JSON parsing libra
 │                      Web Dashboard                              │
 │  Flask + PostgreSQL + Chart.js                                  │
 │  (Multi-host, charts, history, security posture, alerts)        │
+│  (Multi-user auth, 2FA, API keys, session management)           │
 └─────────────────────────────────────────────────────────────────┘
                               ▲
                               │ JSON via HTTP POST
@@ -256,22 +257,294 @@ def send_alert_email(hostname, subject, body):
 - Risk factors with weights
 - Direct link to dashboard
 
-## Dashboard Authentication (v0.5.0)
+## Multi-User Authentication (v0.6.0)
 
-**Decision**: Simple password authentication, not OAuth/SAML.
+**Decision**: Database-backed multi-user system with role-based access control.
 
-**Rationale**:
-- Internal tool, not SaaS
-- One password simpler than identity provider integration
-- Reduces external dependencies
-- Easy to deploy
+**The Problem**:
+Single-password authentication doesn't scale for teams. Different team members need different access levels, and there's no audit trail of who did what.
+
+**Role Design**:
+| Role | Capabilities |
+|------|-------------|
+| **Admin** | Full access: manage users, view audit logs, all operations |
+| **Operator** | Acknowledge events, reset counters, view all data |
+| **Viewer** | Read-only access to dashboards and host data |
+
+**Why These Three Roles?**
+- Maps to common team structures (security admin, ops engineer, developer)
+- Simple enough to understand immediately
+- Granular enough for meaningful access control
 
 **Implementation**:
-- SHA256 hash of password stored in environment
-- Flask session-based authentication
-- API endpoints remain key-authenticated for probes
+```python
+def require_role(*roles):
+    def decorator(f):
+        @wraps(f)
+        def decorated(*args, **kwargs):
+            user_role = session.get('role', 'viewer')
+            if user_role not in roles:
+                return jsonify({'error': 'Insufficient permissions'}), 403
+            return f(*args, **kwargs)
+        return decorated
+    return decorator
+```
 
-**Future Consideration**: Multi-user support with roles (admin, viewer) would require database-backed users.
+**Backward Compatibility**:
+Single-password mode still works. Multi-user activates when users exist in the database. No migration required for existing deployments.
+
+## Two-Factor Authentication (v0.6.0)
+
+**Decision**: Industry-standard TOTP rather than SMS or proprietary 2FA.
+
+**Why TOTP?**
+1. **No external dependencies**: Works offline, no SMS gateway needed
+2. **User choice**: Works with Google Authenticator, Authy, 1Password, etc.
+3. **Industry standard**: RFC 6238, well-understood security properties
+4. **Free**: No per-authentication costs
+
+**Implementation**:
+```python
+import pyotp
+
+# Setup: Generate secret, show QR code
+secret = pyotp.random_base32()
+totp = pyotp.TOTP(secret)
+uri = totp.provisioning_uri(name=username, issuer_name='C-Sentinel')
+
+# Login: Verify code
+if totp.verify(user_code, valid_window=1):
+    # Allow login
+```
+
+**Security Decisions**:
+- Secret stored hashed? No—TOTP secrets must be retrievable to generate codes
+- Secret stored encrypted? No—adds complexity, key management problem
+- Secret stored plain? Yes—protected by database access controls
+- Valid window of 1: Allows for slight clock drift (±30 seconds)
+
+**UX Flow**:
+1. User enables 2FA in profile
+2. QR code displayed (one time only)
+3. User scans with authenticator app
+4. User enters code to verify setup
+5. All future logins require password + TOTP code
+
+## Personal API Keys (v0.6.0)
+
+**Decision**: Per-user API keys that inherit the user's role permissions.
+
+**The Problem**:
+A single global API key means:
+- No accountability (who used it?)
+- All-or-nothing access (can't give read-only to some integrations)
+- Rotation affects everyone
+
+**Design**:
+```sql
+CREATE TABLE user_api_keys (
+    id SERIAL PRIMARY KEY,
+    user_id INTEGER REFERENCES users(id),
+    key_hash VARCHAR(64) NOT NULL,    -- SHA256, never store raw
+    key_prefix VARCHAR(12) NOT NULL,  -- "sk_abc123" for identification
+    name VARCHAR(100) NOT NULL,       -- "CI/CD Pipeline"
+    expires_at TIMESTAMP,             -- Optional expiry
+    last_used TIMESTAMP,
+    active BOOLEAN DEFAULT TRUE
+);
+```
+
+**Security Properties**:
+- Keys are hashed (SHA256)—raw key shown only once at creation
+- Key prefix (`sk_...`) allows identification without exposing full key
+- Keys inherit user's role (viewer key can't reset counters)
+- Keys can be disabled without deletion (for investigation)
+- Per-key expiration (compliance requirement)
+- Last-used tracking (detect unused keys)
+
+**Key Format**:
+```
+sk_29e321e32ed853f696d04cbe0aa9b4146d50858d2771518a
+│  └─────────────────────────────────────────────────────┘
+│                    48 random hex chars
+└── "secret key" prefix
+```
+
+The `sk_` prefix makes keys visually identifiable and greppable in logs.
+
+## Session Management (v0.6.0)
+
+**Decision**: Database-backed sessions with device tracking and revocation.
+
+**The Problem**:
+Flask's default cookie-based sessions don't allow:
+- Seeing who's logged in
+- Forcing logout of compromised sessions
+- Device/browser tracking
+- Session expiry independent of cookie expiry
+
+**Implementation**:
+```sql
+CREATE TABLE user_sessions (
+    id SERIAL PRIMARY KEY,
+    user_id INTEGER REFERENCES users(id),
+    session_token VARCHAR(64) UNIQUE NOT NULL,
+    created_at TIMESTAMP DEFAULT NOW(),
+    last_active TIMESTAMP DEFAULT NOW(),
+    expires_at TIMESTAMP NOT NULL,
+    ip_address VARCHAR(45),
+    user_agent VARCHAR(512)
+);
+```
+
+**Session Token**:
+- `secrets.token_hex(32)` = 64 character cryptographically secure token
+- Stored in Flask session cookie
+- Validated against database on every request
+
+**Why Update last_active?**
+- Enables "active now" indicators
+- Supports idle timeout policies
+- Helps identify abandoned sessions
+
+**Revocation**:
+- Individual session revocation (compromised device)
+- "Logout all others" (password change, suspected compromise)
+- Automatic expiry cleanup (database hygiene)
+
+## Admin Audit Log (v0.6.0)
+
+**Decision**: Log all user actions for compliance and security investigation.
+
+**What We Log**:
+| Action | Details Captured |
+|--------|-----------------|
+| `login` | IP address, 2FA used |
+| `login_failed` | Username attempted, IP address |
+| `logout` | - |
+| `password_changed` | - |
+| `create_user` | New username, role |
+| `update_user` | Fields changed |
+| `delete_user` | Username deleted |
+| `2fa_enabled` | - |
+| `2fa_disabled` | - |
+| `create_api_key` | Key name, prefix |
+| `delete_api_key` | Key prefix |
+| `acknowledge_events` | Host, event count |
+| `reset_audit` | Host |
+
+**What We Don't Log**:
+- Passwords (obviously)
+- Full API keys
+- Dashboard page views (too noisy)
+- Read-only API calls
+
+**Retention**: Logs kept indefinitely. Future consideration: configurable retention policy.
+
+## Real Client IP Detection (v0.6.0)
+
+**Decision**: Read `X-Forwarded-For` header when behind a reverse proxy.
+
+**The Problem**:
+Behind nginx/Caddy, `request.remote_addr` is always `127.0.0.1`. Login notification emails were showing "New login from 127.0.0.1"—useless for security.
+
+**Implementation**:
+```python
+def get_client_ip():
+    # X-Forwarded-For can contain: client, proxy1, proxy2
+    forwarded_for = request.headers.get('X-Forwarded-For')
+    if forwarded_for:
+        return forwarded_for.split(',')[0].strip()
+    
+    # Fallback for nginx
+    real_ip = request.headers.get('X-Real-IP')
+    if real_ip:
+        return real_ip.strip()
+    
+    return request.remote_addr
+```
+
+**Security Consideration**:
+`X-Forwarded-For` can be spoofed by clients. This is acceptable because:
+1. We trust our reverse proxy to set it correctly
+2. It's used for logging/display, not authorization
+3. The alternative (always showing 127.0.0.1) is worse
+
+## Modern Toast Notifications (v0.6.0)
+
+**Decision**: Replace JavaScript `alert()` with custom toast notifications.
+
+**The Problem**:
+`alert()` dialogs are:
+- Modal (blocks the entire page)
+- Ugly (browser chrome, no styling)
+- Disruptive (requires click to dismiss)
+- Dated (screams "1990s web development")
+
+**Implementation**:
+```javascript
+const Toast = {
+    show(message, type = 'info', duration = 4000) {
+        const toast = document.createElement('div');
+        toast.className = `toast-enter ${this.getTypeClasses(type)}`;
+        // ... build toast HTML
+        this.container.appendChild(toast);
+        setTimeout(() => this.dismiss(toast), duration);
+    },
+    success(msg) { return this.show(msg, 'success'); },
+    error(msg) { return this.show(msg, 'error'); },
+    // ...
+};
+```
+
+**Design Choices**:
+- Slide in from right (unobtrusive)
+- Auto-dismiss after 4 seconds (no action required)
+- Manual dismiss available (X button)
+- Color-coded by type (green/red/yellow/blue)
+- Stacks multiple toasts vertically
+
+**Confirm Dialogs**:
+Also replaced `confirm()` with styled modal overlay for destructive actions like session revocation and user deletion.
+
+## User Email Notifications (v0.6.0)
+
+**Decision**: Email users on security-relevant account events.
+
+**Events That Trigger Email**:
+| Event | Why Notify |
+|-------|-----------|
+| New login | Detect unauthorized access |
+| Password changed | Confirm intentional change |
+| Account created | Welcome + credentials |
+| 2FA enabled/disabled | Security status change |
+| Role changed | Access level change |
+
+**Email Content Philosophy**:
+- Clear subject with `[C-Sentinel]` prefix
+- State what happened
+- State when it happened
+- State from where (IP, browser)
+- Provide action if unauthorized
+- Link to dashboard
+
+**Example**:
+```
+Subject: [C-Sentinel] New login from 81.79.231.105
+
+Hello william,
+
+A new login to your C-Sentinel account was detected:
+
+  Time: 03 January 2026 at 23:27
+  IP Address: 81.79.231.105
+  Browser: Chrome
+
+If this was you, no action is needed.
+
+If you did NOT log in, someone may have access to your account.
+Please change your password immediately and contact your administrator.
+```
 
 ## Event History with Acknowledgement (v0.5.0)
 
@@ -362,6 +635,10 @@ The CLI prober is excellent for single-host diagnostics, but teams need:
 hosts (id, hostname, first_seen, last_seen)
 fingerprints (id, host_id, captured_at, data JSONB, exit_code, ...)
 audit_events (id, host_id, event_type, count, details, acknowledged)
+users (id, username, email, password_hash, role, totp_secret, ...)
+user_sessions (id, user_id, session_token, ip_address, ...)
+user_api_keys (id, user_id, key_hash, name, expires_at, ...)
+user_audit_log (id, user_id, action, details, ip_address, ...)
 ```
 
 JSONB allows storing the full fingerprint while extracting key fields for efficient querying.
@@ -434,10 +711,13 @@ The prober reads from `/proc` and specified config files. It requires:
 - **No write access anywhere** (except baseline/config in its own directory)
 
 ### Dashboard security
-- API key required for ingestion
+- API key required for ingestion (global or per-user)
 - Password authentication for web access
-- Session-based login with secure cookies
-- Sensitive audit data protected
+- Optional two-factor authentication (TOTP)
+- Role-based access control
+- Session management with revocation
+- Audit logging of all user actions
+- Sensitive data protected by role
 
 ### Sanitization
 Before sending to LLM:
@@ -462,6 +742,8 @@ This tool embeds certain assumptions from experience:
 10. **The simple approach often wins**: 99KB of C beats 100MB of dependencies.
 11. **Explainability beats precision**: A score users understand is better than a score that's technically more accurate but opaque.
 12. **Alert fatigue is real**: One actionable alert beats ten noisy ones.
+13. **Authentication is table stakes**: Multi-user with 2FA should be the default, not a premium feature.
+14. **Audit everything**: When something goes wrong, you need to know who did what and when.
 
 These aren't just heuristics—they're battle scars.
 

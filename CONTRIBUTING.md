@@ -119,9 +119,22 @@ c-sentinel/
 │   └── ...
 ├── dashboard/            # Flask web dashboard
 │   ├── app.py            # Main Flask application
-│   └── templates/        # HTML templates
+│   ├── templates/        # HTML templates
+│   │   ├── base.html     # Base template with toast system
+│   │   ├── index.html    # Main dashboard
+│   │   ├── host.html     # Host detail view
+│   │   ├── login.html    # Login page (with TOTP support)
+│   │   ├── profile.html  # User profile
+│   │   ├── 2fa.html      # 2FA setup page
+│   │   ├── api_keys.html # API key management
+│   │   └── admin/        # Admin-only pages
+│   │       ├── users.html
+│   │       ├── sessions.html
+│   │       └── audit.html
+│   └── migrate_users.sql # Database migration for multi-user
 └── docs/
-    └── AUDIT_SPEC.md     # Audit integration design
+    ├── AUDIT_SPEC.md     # Audit integration design
+    └── DESIGN_DECISIONS.md
 ```
 
 ## Areas Where Help is Wanted
@@ -137,6 +150,7 @@ We'd particularly welcome contributions in:
 | **Testing** | Edge cases, failure modes, fuzzing |
 | **Dashboard** | UI improvements, new visualisations |
 | **Alerting** | Slack/Teams webhooks, PagerDuty integration |
+| **Security** | Penetration testing, security review |
 
 ## Development Setup
 
@@ -171,10 +185,32 @@ python3 -m venv venv
 source venv/bin/activate
 
 # Install dependencies
-pip install flask psycopg2-binary gunicorn
+pip install flask psycopg2-binary gunicorn pyotp qrcode pillow
+
+# Run database migrations
+sudo -u postgres psql -d sentinel -f migrate_users.sql
 
 # Run development server
 FLASK_DEBUG=1 python app.py
+```
+
+### Dashboard Authentication Modes
+
+The dashboard supports two authentication modes:
+
+1. **Single-password mode**: Set `SENTINEL_ADMIN_PASSWORD_HASH` environment variable
+2. **Multi-user mode**: Create users in the database (activates automatically)
+
+```bash
+# Create first admin user (multi-user mode)
+cd dashboard
+source venv/bin/activate
+python -c "
+import hashlib
+password = input('Password: ')
+print(hashlib.sha256(password.encode()).hexdigest())
+"
+# Then INSERT into users table
 ```
 
 ## Commit Messages
@@ -210,6 +246,7 @@ Before submitting:
 - [ ] JSON output is valid (`sentinel --json | python3 -m json.tool`)
 - [ ] Audit features tested with root (`sudo ./bin/sentinel --audit`)
 - [ ] Dashboard changes tested in browser
+- [ ] Multi-user features tested (login, roles, 2FA)
 - [ ] Documentation updated if behaviour changed
 
 ## Questions?
