@@ -9,11 +9,29 @@ A lightweight, portable system prober written in C that captures "system fingerp
 
 **Live Demo**: [sentinel.speytech.com](https://sentinel.speytech.com)
 
+## Screenshots
+
 ### Security Dashboard
-![Security Dashboard](docs/main-dashboard.png)
+![Security Dashboard](docs/dashboard-screenshot.png)
 
 ### Multi-Host Overview
 ![Hosts Dashboard](docs/hosts-dashboard.png)
+
+### User Profile & Security Settings
+![Profile Page](docs/profile-page.png)
+
+### Two-Factor Authentication
+| Setup | Login |
+|-------|-------|
+| ![2FA Setup](docs/2fa-setup.png) | ![2FA Login](docs/2fa-login.png) |
+
+### Personal API Keys
+![API Keys](docs/api-keys.png)
+
+### Admin Features
+| Session Management | Audit Log |
+|--------------------|-----------|
+| ![Sessions](docs/sessions.png) | ![Audit Log](docs/audit-log.png) |
 
 ### Secure Login
 ![Login Page](docs/login-page.png)
