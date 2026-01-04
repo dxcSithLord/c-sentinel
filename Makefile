@@ -52,7 +52,7 @@ DIFF_SRCS = $(SRC_DIR)/diff.c
 DIFF_OBJS = $(DIFF_SRCS:$(SRC_DIR)/%.c=$(BUILD_DIR)/%.o)
 
 # Header dependencies
-HEADERS = $(INC_DIR)/sentinel.h $(INC_DIR)/policy.h $(INC_DIR)/sanitize.h $(INC_DIR)/audit.h
+HEADERS = $(INC_DIR)/sentinel.h $(INC_DIR)/policy.h $(INC_DIR)/sanitize.h $(INC_DIR)/audit.h $(INC_DIR)/color.h
 
 # Target binaries
 SENTINEL = $(BIN_DIR)/sentinel
@@ -129,6 +129,9 @@ test: all
 	@echo ""
 	@echo "5. Audit probe test..."
 	@./$(SENTINEL) --audit --quick 2>/dev/null && echo "   PASS: Audit probe" || echo "   WARN: Audit probe (auditd may not be installed)"
+	@echo ""
+	@echo "6. Colour output test..."
+	@./$(SENTINEL) --quick --color 2>/dev/null | head -1 | grep -q "C-Sentinel" && echo "   PASS: Colour output" || echo "   FAIL: Colour output"
 	@echo ""
 	@echo "=== All tests complete ==="
 	@rm -f /tmp/sentinel_test.json /tmp/fp1.json /tmp/fp2.json

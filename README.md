@@ -412,7 +412,10 @@ sudo journalctl -u sentinel -f
 | **Audit baseline** | `--audit-learn` | Learn normal security patterns |
 | Baseline compare | `--baseline` | Detect deviations |
 | JSON output | `--json` | Full fingerprint for LLM/dashboard |
+| **Colour output** | `--color` | Coloured terminal output |
 | Config | `--config` | Show current settings |
+
+Colour output is auto-detected (TTY) and respects the [NO_COLOR](https://no-color.org/) standard.
 
 ### Exit Codes (for CI/CD)
 
@@ -458,7 +461,7 @@ sudo journalctl -u sentinel -f
 ```
 ┌─────────────────────────────────────────────────────────────────┐
 │                      Web Dashboard                              │
-│  • Multi-user auth (RBAC)      • Two-factor authentication     │
+│  • Multi-user auth (RBAC)      • Two-factor authentication      │
 │  • Personal API keys           • Session management             │
 │  • Admin audit log             • Email & Slack alerts           │
 │  • Security posture summary    • Risk trend sparkline           │
@@ -552,6 +555,8 @@ c-sentinel/
 - [x] **Admin audit log**
 - [x] **Session management**
 - [x] **Slack webhook alerts**
+- [x] **Public demo mode**
+- [x] **Colour terminal output**
 
 ### Planned 📋
 - [ ] FreeBSD/macOS support

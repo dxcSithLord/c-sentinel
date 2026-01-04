@@ -20,6 +20,7 @@
 
 #include "sentinel.h"
 #include "audit.h"
+#include "color.h"
 
 /* Default config files to probe if none specified */
 static const char *default_configs[] = {
@@ -60,6 +61,8 @@ static void print_usage(const char *prog) {
     fprintf(stderr, "  -c, --config         Show current configuration\n");
     fprintf(stderr, "      --init-config    Create default config file\n");
     fprintf(stderr, "      --audit-learn    Learn audit baseline\n");
+    fprintf(stderr, "      --color          Force coloured output\n");
+    fprintf(stderr, "      --no-color       Disable coloured output\n");
     fprintf(stderr, "\n");
     fprintf(stderr, "Exit codes:\n");
     fprintf(stderr, "  0 - No issues detected\n");
@@ -77,6 +80,9 @@ static void print_usage(const char *prog) {
     fprintf(stderr, "  Include security events:       %s --quick --audit\n", prog);
     fprintf(stderr, "  Learn audit baseline:          %s --audit-learn\n", prog);
     fprintf(stderr, "  Full analysis with audit:      %s --json --network --audit\n", prog);
+    fprintf(stderr, "\n");
+    fprintf(stderr, "Environment:\n");
+    fprintf(stderr, "  NO_COLOR             Disable coloured output (standard)\n");
     fprintf(stderr, "\n");
     fprintf(stderr, "Config file: ~/.sentinel/config\n");
     fprintf(stderr, "\n");
@@ -100,54 +106,60 @@ static void print_timestamp(void) {
 
 static void print_audit_summary_quick(const audit_summary_t *audit) {
     if (!audit || !audit->enabled) {
-        printf("\nAudit: unavailable (auditd not running or not readable)\n");
+        printf("\n%sAudit:%s unavailable (auditd not running or not readable)\n", 
+               col_header(), col_reset());
         return;
     }
     
-    printf("\nSecurity (audit):\n");
-    printf("  Auth failures: %d", audit->auth_failures);
+    printf("\n%sSecurity (audit):%s\n", col_header(), col_reset());
+    printf("  Auth failures: %s%d%s", 
+           audit->auth_failures > 0 ? col_warn() : col_ok(),
+           audit->auth_failures,
+           col_reset());
     if (audit->auth_deviation_pct > 100.0f) {
-        printf(" (%.0f%% above baseline) ⚠", audit->auth_deviation_pct);
+        printf(" %s(%.0f%% above baseline) ⚠%s", col_warn(), audit->auth_deviation_pct, col_reset());
     }
     printf("\n");
     
     if (audit->brute_force_detected) {
-        printf("  ⚠ BRUTE FORCE PATTERN DETECTED\n");
+        printf("  %s⚠ BRUTE FORCE PATTERN DETECTED%s\n", col_critical(), col_reset());
     }
     
     printf("  Sudo commands: %d", audit->sudo_count);
     if (audit->sudo_deviation_pct > 200.0f) {
-        printf(" (%.0f%% above baseline) ⚠", audit->sudo_deviation_pct);
+        printf(" %s(%.0f%% above baseline) ⚠%s", col_warn(), audit->sudo_deviation_pct, col_reset());
     }
     printf("\n");
     
     if (audit->sensitive_file_count > 0) {
-        printf("  Sensitive file access: %d\n", audit->sensitive_file_count);
+        printf("  Sensitive file access: %s%d%s\n", col_warn(), audit->sensitive_file_count, col_reset());
         for (int i = 0; i < audit->sensitive_file_count && i < 5; i++) {
-            printf("    - %s by %s%s\n", 
+            printf("    - %s by %s%s%s\n", 
                    audit->sensitive_files[i].path,
                    audit->sensitive_files[i].process,
+                   audit->sensitive_files[i].suspicious ? col_warn() : "",
                    audit->sensitive_files[i].suspicious ? " ⚠" : "");
+            if (audit->sensitive_files[i].suspicious) printf("%s", col_reset());
         }
     }
     
     if (audit->tmp_executions > 0) {
-        printf("  ⚠ Executions from /tmp: %d\n", audit->tmp_executions);
+        printf("  %s⚠ Executions from /tmp: %d%s\n", col_critical(), audit->tmp_executions, col_reset());
     }
     if (audit->devshm_executions > 0) {
-        printf("  ⚠ Executions from /dev/shm: %d\n", audit->devshm_executions);
+        printf("  %s⚠ Executions from /dev/shm: %d%s\n", col_critical(), audit->devshm_executions, col_reset());
     }
     
     if (audit->selinux_avc_denials > 0) {
-        printf("  SELinux denials: %d\n", audit->selinux_avc_denials);
+        printf("  SELinux denials: %s%d%s\n", col_warn(), audit->selinux_avc_denials, col_reset());
     }
     if (audit->apparmor_denials > 0) {
-        printf("  AppArmor denials: %d\n", audit->apparmor_denials);
+        printf("  AppArmor denials: %s%d%s\n", col_warn(), audit->apparmor_denials, col_reset());
     }
     
     /* Show anomalies */
     if (audit->anomaly_count > 0) {
-        printf("\n  Anomalies detected:\n");
+        printf("\n  %sAnomalies detected:%s\n", col_warn(), col_reset());
         for (int i = 0; i < audit->anomaly_count; i++) {
             printf("    [%s] %s\n", 
                    audit->anomalies[i].severity,
@@ -223,29 +235,41 @@ static int run_analysis(const char **configs, int config_count,
         free(json);
     } else if (quick_mode) {
         /* Quick analysis only */
-        printf("C-Sentinel Quick Analysis\n");
+        printf("%sC-Sentinel Quick Analysis%s\n", col_header(), col_reset());
         printf("========================\n");
-        printf("Hostname: %s\n", fp.system.hostname);
+        printf("Hostname: %s%s%s\n", col_info(), fp.system.hostname, col_reset());
         printf("Uptime: %.1f days\n", fp.system.uptime_seconds / 86400.0);
         printf("Load: %.2f %.2f %.2f\n", 
                fp.system.load_avg[0], fp.system.load_avg[1], fp.system.load_avg[2]);
-        printf("Memory: %.1f%% used\n", 
-               100.0 * (1.0 - (double)fp.system.free_ram / fp.system.total_ram));
+        
+        double mem_pct = 100.0 * (1.0 - (double)fp.system.free_ram / fp.system.total_ram);
+        printf("Memory: %s%.1f%%%s used\n", 
+               mem_pct > 90 ? col_error() : mem_pct > 75 ? col_warn() : col_ok(),
+               mem_pct, col_reset());
         printf("Processes: %d total\n", fp.process_count);
-        printf("\nPotential Issues:\n");
-        printf("  Zombie processes: %d%s\n", analysis.zombie_process_count,
+        
+        printf("\n%sPotential Issues:%s\n", col_header(), col_reset());
+        printf("  Zombie processes: %s%d%s%s\n", 
+               analysis.zombie_process_count > 0 ? col_error() : col_ok(),
+               analysis.zombie_process_count, col_reset(),
                analysis.zombie_process_count > 0 ? " ⚠" : "");
-        printf("  High FD processes: %d%s\n", analysis.high_fd_process_count,
+        printf("  High FD processes: %s%d%s%s\n", 
+               analysis.high_fd_process_count > 5 ? col_warn() : col_ok(),
+               analysis.high_fd_process_count, col_reset(),
                analysis.high_fd_process_count > 5 ? " ⚠" : "");
         printf("  Long-running (>7d): %d\n", analysis.long_running_process_count);
-        printf("  Config permission issues: %d%s\n", analysis.config_permission_issues,
+        printf("  Config permission issues: %s%d%s%s\n", 
+               analysis.config_permission_issues > 0 ? col_error() : col_ok(),
+               analysis.config_permission_issues, col_reset(),
                analysis.config_permission_issues > 0 ? " ⚠" : "");
         
         if (network_mode) {
-            printf("\nNetwork:\n");
+            printf("\n%sNetwork:%s\n", col_header(), col_reset());
             printf("  Listening ports: %d\n", fp.network.total_listening);
             printf("  Established connections: %d\n", fp.network.total_established);
-            printf("  Unusual ports: %d%s\n", analysis.unusual_listeners,
+            printf("  Unusual ports: %s%d%s%s\n", 
+                   analysis.unusual_listeners > 0 ? col_warn() : col_ok(),
+                   analysis.unusual_listeners, col_reset(),
                    analysis.unusual_listeners > 0 ? " ⚠" : "");
             
             /* Show listeners if any */
@@ -253,11 +277,12 @@ static int run_analysis(const char **configs, int config_count,
                 printf("\n  Listeners:\n");
                 for (int i = 0; i < fp.network.listener_count && i < 10; i++) {
                     net_listener_t *l = &fp.network.listeners[i];
-                    printf("    %s:%d (%s) - %s\n", 
-                           l->local_addr, l->local_port, l->protocol, l->process_name);
+                    printf("    %s%s:%d%s (%s) - %s\n", 
+                           col_dim(), l->local_addr, l->local_port, col_reset(),
+                           l->protocol, l->process_name);
                 }
                 if (fp.network.listener_count > 10) {
-                    printf("    ... and %d more\n", fp.network.listener_count - 10);
+                    printf("    %s... and %d more%s\n", col_dim(), fp.network.listener_count - 10, col_reset());
                 }
             }
         }
@@ -333,6 +358,7 @@ int main(int argc, char *argv[]) {
     int show_config = 0;
     int init_config = 0;
     int interval = 60;
+    int force_color = 0;  /* 0=auto, 1=force on, -1=force off */
     int opt;
     
     static struct option long_options[] = {
@@ -349,10 +375,14 @@ int main(int argc, char *argv[]) {
         {"config",      no_argument,       0, 'c'},
         {"init-config", no_argument,       0, 'C'},
         {"audit-learn", no_argument,       0, 'A'},
+        {"color",       no_argument,       0, 'K'},
+        {"colour",      no_argument,       0, 'K'},
+        {"no-color",    no_argument,       0, 'N'},
+        {"no-colour",   no_argument,       0, 'N'},
         {0, 0, 0, 0}
     };
     
-    while ((opt = getopt_long(argc, argv, "hqvjwi:nablcCA", long_options, NULL)) != -1) {
+    while ((opt = getopt_long(argc, argv, "hqvjwi:nablcCAKN", long_options, NULL)) != -1) {
         switch (opt) {
             case 'h':
                 print_usage(argv[0]);
@@ -395,11 +425,20 @@ int main(int argc, char *argv[]) {
             case 'A':
                 audit_learn = 1;
                 break;
+            case 'K':
+                force_color = 1;
+                break;
+            case 'N':
+                force_color = -1;
+                break;
             default:
                 print_usage(argv[0]);
                 return EXIT_ERROR;
         }
     }
+    
+    /* Initialize colour output */
+    color_init(force_color);
     
     /* Handle --init-config */
     if (init_config) {
@@ -512,9 +551,9 @@ int main(int argc, char *argv[]) {
         analyze_fingerprint_quick(&fp, &analysis);
         
         /* Show quick summary */
-        printf("C-Sentinel Quick Analysis\n");
+        printf("%sC-Sentinel Quick Analysis%s\n", col_header(), col_reset());
         printf("========================\n");
-        printf("Hostname: %s\n", fp.system.hostname);
+        printf("Hostname: %s%s%s\n", col_info(), fp.system.hostname, col_reset());
         printf("Uptime: %.1f days\n", fp.system.uptime_seconds / 86400.0);
         printf("Load: %.2f %.2f %.2f\n", 
                fp.system.load_avg[0], fp.system.load_avg[1], fp.system.load_avg[2]);
